@@ -67,10 +67,41 @@ class HMC_Core {
             border: 1px solid #e0e0e0;
             margin: 15px 0;
         }
+        .hmc-related-posts {
+            background: #fff3cd;
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid #ffeaa7;
+            margin: 15px 0;
+        }
         .hmc-tip {
             color: #28a745;
             margin: 5px 0;
             font-size: 14px;
+        }
+        .hmc-posts-list {
+            margin-top: 10px;
+        }
+        .hmc-post-item {
+            margin-bottom: 8px;
+            padding: 8px;
+            background: white;
+            border-radius: 4px;
+            border-left: 3px solid #ffd43b;
+        }
+        .hmc-post-link {
+            text-decoration: none;
+            color: #2c5530;
+            font-weight: 500;
+            display: block;
+        }
+        .hmc-post-link:hover {
+            color: #28a745;
+        }
+        .hmc-post-date {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 4px;
         }
         .hmc-moon-icon {
             font-size: 20px;
@@ -80,6 +111,12 @@ class HMC_Core {
             align-items: center;
             gap: 10px;
             margin-bottom: 10px;
+        }
+        .hmc-no-posts {
+            color: #6c757d;
+            font-style: italic;
+            text-align: center;
+            padding: 10px;
         }
         ";
     }
@@ -250,6 +287,98 @@ class HMC_Core {
         return array_slice($tips, 0, 3); // Максимум 3 совета
     }
     
+    /**
+     * Получение связанных статей для лунного дня
+     */
+    public function get_related_posts($lunar_day = null, $phase_type = null, $limit = 3) {
+        if (!$lunar_day) {
+            $moon_data = $this->get_moon_data();
+            $lunar_day = $moon_data['day'];
+            $phase_type = $moon_data['is_waxing'] ? 'waxing' : ($moon_data['is_waning'] ? 'waning' : 'new');
+        }
+        
+        // Пробуем разные способы поиска статей
+        $posts = $this->get_posts_by_meta($lunar_day, $phase_type, $limit);
+        
+        if (empty($posts)) {
+            $posts = $this->get_posts_by_categories($phase_type, $limit);
+        }
+        
+        if (empty($posts)) {
+            $posts = $this->get_posts_by_tags($lunar_day, $phase_type, $limit);
+        }
+        
+        return $posts;
+    }
+    
+    /**
+     * Поиск статей по метаполям
+     */
+    private function get_posts_by_meta($lunar_day, $phase_type, $limit) {
+        $args = [
+            'post_type' => 'post',
+            'posts_per_page' => $limit,
+            'post_status' => 'publish',
+            'meta_query' => [
+                'relation' => 'OR',
+                [
+                    'key' => 'hmc_lunar_day',
+                    'value' => $lunar_day,
+                    'compare' => '='
+                ],
+                [
+                    'key' => 'hmc_moon_phase',
+                    'value' => $phase_type,
+                    'compare' => '='
+                ]
+            ]
+        ];
+        
+        return get_posts($args);
+    }
+    
+    /**
+     * Поиск статей по категориям
+     */
+    private function get_posts_by_categories($phase_type, $limit) {
+        $category_map = [
+            'waxing' => get_option('hmc_waxing_category'),
+            'waning' => get_option('hmc_waning_category'),
+            'new' => get_option('hmc_new_moon_category'),
+            'full' => get_option('hmc_full_moon_category')
+        ];
+        
+        $category_id = $category_map[$phase_type] ?? 0;
+        
+        if (!$category_id) {
+            return [];
+        }
+        
+        return get_posts([
+            'post_type' => 'post',
+            'posts_per_page' => $limit,
+            'post_status' => 'publish',
+            'category__in' => [$category_id]
+        ]);
+    }
+    
+    /**
+     * Поиск статей по тегам
+     */
+    private function get_posts_by_tags($lunar_day, $phase_type, $limit) {
+        $tags = [
+            'лунный_день_' . $lunar_day,
+            'фаза_луны_' . $phase_type
+        ];
+        
+        return get_posts([
+            'post_type' => 'post',
+            'posts_per_page' => $limit,
+            'post_status' => 'publish',
+            'tag_slug__in' => $tags
+        ]);
+    }
+    
     private function normalize_timestamp($date) {
         if (!$date) return current_time('timestamp');
         if (is_string($date)) {
@@ -312,6 +441,52 @@ class HMC_Core {
             <?php foreach ($moon_data['care_tips'] as $tip): ?>
                 <div class="hmc-tip">✓ <?php echo $tip; ?></div>
             <?php endforeach; ?>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+    
+    /**
+     * Шорткод для связанных статей
+     */
+    public function shortcode_related_posts($atts) {
+        $atts = shortcode_atts([
+            'limit' => 3,
+            'show_date' => 'false',
+            'date' => '',
+            'title' => ''
+        ], $atts);
+        
+        $moon_data = $this->get_moon_data($atts['date']);
+        $posts = $this->get_related_posts($moon_data['day'], 
+                    $moon_data['is_waxing'] ? 'waxing' : 'waning', 
+                    (int)$atts['limit']);
+        
+        ob_start();
+        ?>
+        <div class="hmc-related-posts">
+            <?php if ($atts['title']): ?>
+                <h4><?php echo esc_html($atts['title']); ?></h4>
+            <?php else: ?>
+                <h4>📚 Статьи для лунного дня <?php echo $moon_data['day']; ?></h4>
+            <?php endif; ?>
+            
+            <?php if (empty($posts)): ?>
+                <div class="hmc-no-posts">Пока нет статей для этой лунной фазы</div>
+            <?php else: ?>
+                <div class="hmc-posts-list">
+                    <?php foreach ($posts as $post): ?>
+                    <div class="hmc-post-item">
+                        <a href="<?php echo get_permalink($post->ID); ?>" class="hmc-post-link">
+                            <?php echo get_the_title($post->ID); ?>
+                        </a>
+                        <?php if ($atts['show_date'] === 'true'): ?>
+                            <div class="hmc-post-date"><?php echo get_the_date('d.m.Y', $post->ID); ?></div>
+                        <?php endif; ?>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
         </div>
         <?php
         return ob_get_clean();
